@@ -40,6 +40,54 @@ import numpy as np
 import cv2
 import serial
 
+import subprocess
+
+class RpiCamMJPEG:
+    def __init__(self, width=640, height=480, fps=30):
+        self.proc = subprocess.Popen(
+            [
+                "rpicam-vid",
+                "-t", "0",
+                "--width", str(width),
+                "--height", str(height),
+                "--framerate", str(fps),
+                "--codec", "mjpeg",
+                "-o", "-"
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            bufsize=0
+        )
+        if self.proc.stdout is None:
+            raise RuntimeError("Failed to start rpicam-vid.")
+        self.buf = bytearray()
+
+    def read_bgr(self):
+        # Find complete JPEG frames (FFD8 ... FFD9)
+        while True:
+            chunk = self.proc.stdout.read(4096)
+            if not chunk:
+                raise RuntimeError("rpicam-vid stopped producing data.")
+            self.buf.extend(chunk)
+
+            start = self.buf.find(b"\xff\xd8")
+            end = self.buf.find(b"\xff\xd9")
+            if start != -1 and end != -1 and end > start:
+                jpg = self.buf[start:end+2]
+                del self.buf[:end+2]
+
+                arr = np.frombuffer(jpg, dtype=np.uint8)
+                frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+                if frame is not None:
+                    return frame
+
+    def close(self):
+        try:
+            if self.proc and self.proc.poll() is None:
+                self.proc.terminate()
+        except Exception:
+            pass
+
 # --- Optional Pi camera (Picamera2) ---
 PICAMERA2_AVAILABLE = True
 try:
@@ -83,7 +131,7 @@ class Config:
     SERIAL_TIMEOUT_S: float = 0.2
 
     # Camera backend
-    CAMERA_BACKEND: str = "picamera2"   # "picamera2" or "opencv"
+    CAMERA_BACKEND: str = "opencv"   # "picamera2" or "opencv"
     OPENCV_CAM_INDEX: int = 0           # used if CAMERA_BACKEND="opencv"
 
     # UI
@@ -327,7 +375,7 @@ class Camera:
             time.sleep(0.2)
             self.cap = None
         elif self.backend == "opencv":
-            self.cap = cv2.VideoCapture(CFG.OPENCV_CAM_INDEX)
+            self.rpi = RpiCamMJPEG(width=CFG.CAM_W, height=CFG.CAM_H, fps=30)
             self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, CFG.CAM_W)
             self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, CFG.CAM_H)
             self.picam2 = None
@@ -340,7 +388,7 @@ class Camera:
             rgb = self.picam2.capture_array()
             return cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
         else:
-            ok, frame = self.cap.read()
+            return self.rpi.read_bgr()
             if not ok or frame is None:
                 raise RuntimeError("Failed to read from OpenCV camera")
             return frame
@@ -370,7 +418,8 @@ def main():
     rover.start()
     rover.enable_feedback()
 
-    cam = Camera()
+    cam = RpiCamMJPEG(640, 480, 30)
+    frame = cam.read_bgr()
     pid = PID(CFG.KP, CFG.KI, CFG.KD)
 
     print("Running. Press 'q' to quit.")
