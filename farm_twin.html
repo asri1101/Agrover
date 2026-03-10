@@ -1,0 +1,402 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Farm Digital Twin</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  :root {
+    --bg: #0f1117;
+    --surface: #1a1d27;
+    --surface2: #232733;
+    --border: #2e3345;
+    --text: #e2e4ea;
+    --text-dim: #8b8fa3;
+    --accent: #6c8cff;
+    --green: #34d399;
+    --yellow: #fbbf24;
+    --red: #f87171;
+    --orange: #fb923c;
+  }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    display: flex;
+    height: 100vh;
+    overflow: hidden;
+  }
+
+  #sidebar {
+    width: 300px;
+    min-width: 300px;
+    background: var(--surface);
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto;
+  }
+
+  .sidebar-header {
+    padding: 20px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .sidebar-header h1 {
+    font-size: 18px;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .sidebar-header p {
+    font-size: 12px;
+    color: var(--text-dim);
+    margin-top: 4px;
+  }
+
+  .section { padding: 16px 20px; border-bottom: 1px solid var(--border); }
+  .section-title { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: var(--text-dim); margin-bottom: 12px; }
+
+  .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+
+  .stat-card {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px;
+  }
+  .stat-card .label { font-size: 11px; color: var(--text-dim); margin-bottom: 4px; }
+  .stat-card .value { font-size: 22px; font-weight: 700; }
+  .stat-card .value.green { color: var(--green); }
+  .stat-card .value.yellow { color: var(--yellow); }
+  .stat-card .value.red { color: var(--red); }
+  .stat-card .value.accent { color: var(--accent); }
+
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 0;
+    font-size: 13px;
+  }
+  .legend-dot {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+  .legend-count { margin-left: auto; color: var(--text-dim); font-size: 12px; font-variant-numeric: tabular-nums; }
+
+  .filter-btn {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 6px 12px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 12px;
+    transition: 0.15s;
+  }
+  .filter-btn:hover { border-color: var(--accent); }
+  .filter-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+  .filter-row { display: flex; gap: 6px; flex-wrap: wrap; }
+
+  #map-container { flex: 1; position: relative; }
+
+  #map {
+    width: 100%;
+    height: 100%;
+    background: #141720;
+  }
+
+  .leaflet-container { background: #141720 !important; }
+  .leaflet-control-zoom a {
+    background: var(--surface) !important;
+    color: var(--text) !important;
+    border-color: var(--border) !important;
+  }
+  .leaflet-control-zoom a:hover { background: var(--surface2) !important; }
+  .leaflet-popup-content-wrapper {
+    background: var(--surface);
+    color: var(--text);
+    border-radius: 8px;
+    box-shadow: 0 8px 30px rgba(0,0,0,0.5);
+  }
+  .leaflet-popup-tip { background: var(--surface); }
+  .leaflet-popup-content { margin: 12px 16px; font-size: 13px; line-height: 1.6; }
+  .leaflet-popup-content b { font-weight: 600; }
+
+  .map-overlay {
+    position: absolute;
+    top: 16px;
+    right: 16px;
+    z-index: 1000;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px 16px;
+    font-size: 12px;
+    color: var(--text-dim);
+    pointer-events: none;
+  }
+
+  .robot-marker {
+    background: none;
+    border: none;
+  }
+
+  @keyframes pulse {
+    0%, 100% { transform: scale(1); opacity: 1; }
+    50% { transform: scale(1.4); opacity: 0.5; }
+  }
+</style>
+</head>
+<body>
+
+<div id="sidebar">
+  <div class="sidebar-header">
+    <h1><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg> Farm Digital Twin</h1>
+    <p>Real-time field monitoring</p>
+  </div>
+
+  <div class="section">
+    <div class="section-title">Overview</div>
+    <div class="stat-grid">
+      <div class="stat-card">
+        <div class="label">Total Fruits</div>
+        <div class="value accent" id="stat-total">0</div>
+      </div>
+      <div class="stat-card">
+        <div class="label">Ripe</div>
+        <div class="value green" id="stat-ripe">0</div>
+      </div>
+      <div class="stat-card">
+        <div class="label">Ripening</div>
+        <div class="value yellow" id="stat-ripening">0</div>
+      </div>
+      <div class="stat-card">
+        <div class="label">Unripe</div>
+        <div class="value red" id="stat-unripe">0</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">Legend</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#34d399"></div> Ripe <span class="legend-count" id="leg-ripe">0</span></div>
+    <div class="legend-item"><div class="legend-dot" style="background:#fbbf24"></div> Ripening <span class="legend-count" id="leg-ripening">0</span></div>
+    <div class="legend-item"><div class="legend-dot" style="background:#f87171"></div> Unripe <span class="legend-count" id="leg-unripe">0</span></div>
+    <div class="legend-item"><div class="legend-dot" style="background:#6c8cff"></div> Robot Position <span class="legend-count">1</span></div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">Filter</div>
+    <div class="filter-row">
+      <button class="filter-btn active" data-filter="all">All</button>
+      <button class="filter-btn" data-filter="ripe">Ripe</button>
+      <button class="filter-btn" data-filter="ripening">Ripening</button>
+      <button class="filter-btn" data-filter="unripe">Unripe</button>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">Selected Fruit</div>
+    <div id="detail-panel" style="font-size:13px;color:var(--text-dim);">Click a fruit marker on the map to inspect it.</div>
+  </div>
+</div>
+
+<div id="map-container">
+  <div id="map"></div>
+  <div class="map-overlay">Scroll to zoom · Drag to pan</div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+const FARM_W = 200, FARM_H = 120;
+const ROW_COUNT = 8;
+const TREES_PER_ROW = 18;
+const ROW_SPACING = FARM_H / (ROW_COUNT + 1);
+const TREE_SPACING = (FARM_W - 30) / (TREES_PER_ROW - 1);
+
+const STATUS_COLORS = { ripe: '#34d399', ripening: '#fbbf24', unripe: '#f87171' };
+const STATUS_WEIGHTS = { ripe: 0.45, ripening: 0.35, unripe: 0.20 };
+
+function pickStatus() {
+  const r = Math.random();
+  if (r < STATUS_WEIGHTS.ripe) return 'ripe';
+  if (r < STATUS_WEIGHTS.ripe + STATUS_WEIGHTS.ripening) return 'ripening';
+  return 'unripe';
+}
+
+function generateFruits() {
+  const fruits = [];
+  let id = 1;
+  for (let row = 0; row < ROW_COUNT; row++) {
+    const y = ROW_SPACING * (row + 1);
+    for (let col = 0; col < TREES_PER_ROW; col++) {
+      const x = 15 + col * TREE_SPACING;
+      const count = Math.floor(Math.random() * 4) + 1;
+      for (let f = 0; f < count; f++) {
+        const fx = x + (Math.random() - 0.5) * 3.5;
+        const fy = y + (Math.random() - 0.5) * 3.5;
+        fruits.push({
+          id: id++,
+          x: fx,
+          y: fy,
+          row: row + 1,
+          tree: col + 1,
+          status: pickStatus(),
+          size_mm: Math.round(30 + Math.random() * 50),
+          confidence: +(0.7 + Math.random() * 0.3).toFixed(2),
+        });
+      }
+    }
+  }
+  return fruits;
+}
+
+const fruits = generateFruits();
+
+const map = L.map('map', {
+  crs: L.CRS.Simple,
+  minZoom: -1,
+  maxZoom: 5,
+  zoomSnap: 0.25,
+  zoomDelta: 0.5,
+  attributionControl: false,
+});
+
+const bounds = [[0, 0], [FARM_H, FARM_W]];
+map.fitBounds(bounds);
+
+// Farm boundary
+L.rectangle(bounds, { color: '#2e3345', weight: 1, fillColor: '#1a2210', fillOpacity: 0.35, interactive: false }).addTo(map);
+
+// Row strips
+for (let row = 0; row < ROW_COUNT; row++) {
+  const y = ROW_SPACING * (row + 1);
+  L.rectangle([[y - 2.5, 10], [y + 2.5, FARM_W - 10]], {
+    color: '#2a3a1a', weight: 0, fillColor: '#243018', fillOpacity: 0.5, interactive: false
+  }).addTo(map);
+
+  L.polyline([[y, 10], [y, FARM_W - 10]], {
+    color: '#3a5020', weight: 1, dashArray: '4 4', interactive: false
+  }).addTo(map);
+
+  L.marker([y, 5], {
+    icon: L.divIcon({
+      className: '',
+      html: `<div style="color:#5a6a40;font-size:10px;white-space:nowrap;font-weight:600;">R${row+1}</div>`,
+      iconAnchor: [0, 6]
+    }),
+    interactive: false
+  }).addTo(map);
+}
+
+// Fruit markers
+const markerLayers = { ripe: [], ripening: [], unripe: [] };
+const allMarkers = [];
+
+fruits.forEach(f => {
+  const marker = L.circleMarker([f.y, f.x], {
+    radius: 5,
+    fillColor: STATUS_COLORS[f.status],
+    fillOpacity: 0.85,
+    color: '#fff',
+    weight: 0.5,
+    _fruitData: f,
+  }).addTo(map);
+
+  marker.on('click', () => showDetail(f));
+
+  marker.bindPopup(
+    `<b>Fruit #${f.id}</b><br>` +
+    `Row ${f.row}, Tree ${f.tree}<br>` +
+    `Status: <span style="color:${STATUS_COLORS[f.status]};font-weight:600">${f.status}</span><br>` +
+    `Size: ${f.size_mm} mm<br>` +
+    `Confidence: ${(f.confidence * 100).toFixed(0)}%`
+  );
+
+  markerLayers[f.status].push(marker);
+  allMarkers.push(marker);
+});
+
+// Robot position (simulated)
+const robotPos = [ROW_SPACING * 3, FARM_W * 0.35];
+const robotIcon = L.divIcon({
+  className: 'robot-marker',
+  html: `<svg width="28" height="28" viewBox="0 0 28 28">
+    <circle cx="14" cy="14" r="12" fill="#6c8cff" fill-opacity="0.2" stroke="#6c8cff" stroke-width="1.5" style="animation:pulse 2s infinite"/>
+    <circle cx="14" cy="14" r="5" fill="#6c8cff"/>
+    <circle cx="14" cy="14" r="2" fill="#fff"/>
+  </svg>`,
+  iconSize: [28, 28],
+  iconAnchor: [14, 14],
+});
+const robotMarker = L.marker(robotPos, { icon: robotIcon }).addTo(map);
+robotMarker.bindPopup('<b>AG Bot</b><br>Status: Active<br>Battery: 78%<br>Speed: 0.20 m/s');
+
+// Simulated robot movement along row 3
+let robotX = FARM_W * 0.35;
+const robotRow = ROW_SPACING * 3;
+setInterval(() => {
+  robotX += 0.15;
+  if (robotX > FARM_W - 15) robotX = 15;
+  robotMarker.setLatLng([robotRow + (Math.random() - 0.5) * 0.5, robotX]);
+}, 100);
+
+// Stats
+function updateStats(visibleFruits) {
+  const counts = { ripe: 0, ripening: 0, unripe: 0 };
+  visibleFruits.forEach(f => counts[f.status]++);
+  document.getElementById('stat-total').textContent = visibleFruits.length;
+  document.getElementById('stat-ripe').textContent = counts.ripe;
+  document.getElementById('stat-ripening').textContent = counts.ripening;
+  document.getElementById('stat-unripe').textContent = counts.unripe;
+  document.getElementById('leg-ripe').textContent = counts.ripe;
+  document.getElementById('leg-ripening').textContent = counts.ripening;
+  document.getElementById('leg-unripe').textContent = counts.unripe;
+}
+updateStats(fruits);
+
+function showDetail(f) {
+  document.getElementById('detail-panel').innerHTML =
+    `<div style="margin-bottom:6px"><b style="font-size:15px;color:var(--text)">Fruit #${f.id}</b></div>` +
+    `<div>Row <b>${f.row}</b> &middot; Tree <b>${f.tree}</b></div>` +
+    `<div>Status: <span style="color:${STATUS_COLORS[f.status]};font-weight:600">${f.status}</span></div>` +
+    `<div>Size: ${f.size_mm} mm</div>` +
+    `<div>Detection confidence: ${(f.confidence * 100).toFixed(0)}%</div>` +
+    `<div style="margin-top:6px;color:var(--text-dim);font-size:11px">Position: (${f.x.toFixed(1)}, ${f.y.toFixed(1)})</div>`;
+}
+
+// Filter buttons
+let activeFilter = 'all';
+document.querySelectorAll('.filter-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    activeFilter = btn.dataset.filter;
+
+    allMarkers.forEach(m => {
+      const s = m.options._fruitData.status;
+      if (activeFilter === 'all' || s === activeFilter) {
+        m.addTo(map);
+      } else {
+        map.removeLayer(m);
+      }
+    });
+
+    const visible = activeFilter === 'all' ? fruits : fruits.filter(f => f.status === activeFilter);
+    updateStats(visible);
+  });
+});
+</script>
+</body>
+</html>
