@@ -13,11 +13,14 @@ States:
 """
 
 import argparse
+import csv
 import json
+import os
 import threading
 import time
 from dataclasses import dataclass
 from enum import Enum, auto
+from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 import numpy as np
 import cv2
@@ -149,6 +152,15 @@ class Config:
 
     # Brief pause before starting turn (seconds)
     PRE_TURN_PAUSE_S: float = 0.4
+
+    # ── COLMAP capture (runs during ROW_FOLLOWING) ─────────────────────────
+    CAPTURE_ENABLED:    bool  = False
+    CAPTURE_INTERVAL_S: float = 2.0    # seconds between captures
+    CAPTURE_SETTLE_S:   float = 0.25   # pause after stopping before shutter
+    CAPTURE_WIDTH:      int   = 1920
+    CAPTURE_HEIGHT:     int   = 1080
+    CAPTURE_TIMEOUT_MS: int   = 1500
+    CAPTURE_OUTPUT_DIR: str   = "colmap_sessions"
 
 
 CFG = Config()
@@ -282,6 +294,11 @@ class WaveRoverSerial:
 
         self._yaw_rad    = yaw_rad
         self._yaw_prev_t = now
+
+    def get_imu_snapshot(self) -> Optional[Dict[str, Any]]:
+        """Return a copy of the most recent IMU message (or None)."""
+        with self._lock:
+            return dict(self.latest_msg) if self.latest_msg else None
 
     def get_yaw_rad(self) -> Optional[float]:
         return self._yaw_rad
@@ -497,6 +514,37 @@ class EndOfRowDetector:
 
 
 # =============================================================================
+# COLMAP capture helpers
+# =============================================================================
+def create_session_dir() -> Path:
+    stamp = time.strftime("%Y%m%d_%H%M%S")
+    session = Path(CFG.CAPTURE_OUTPUT_DIR) / f"session_{stamp}"
+    (session / "images").mkdir(parents=True, exist_ok=True)
+    return session
+
+
+def capture_still(path: str) -> bool:
+    """Capture a single JPEG still via rpicam-still. Returns True on success."""
+    try:
+        result = subprocess.run(
+            [
+                "rpicam-still",
+                "-o", path,
+                "--width", str(CFG.CAPTURE_WIDTH),
+                "--height", str(CFG.CAPTURE_HEIGHT),
+                "-t", str(CFG.CAPTURE_TIMEOUT_MS),
+                "--nopreview", "-n",
+            ],
+            capture_output=True,
+            timeout=CFG.CAPTURE_TIMEOUT_MS / 1000 + 5,
+        )
+        return result.returncode == 0 and os.path.isfile(path)
+    except Exception as e:
+        print(f"  [CAP] capture_still failed: {e}")
+        return False
+
+
+# =============================================================================
 # Main
 # =============================================================================
 def main():
@@ -505,7 +553,14 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("port", type=str,
                         help="Serial port, e.g. /dev/ttyUSB0")
+    parser.add_argument("--capture", action="store_true",
+                        help="Enable COLMAP image capture during row following")
+    parser.add_argument("--capture-interval", type=float, default=CFG.CAPTURE_INTERVAL_S,
+                        help="Seconds between captures (default: %(default)s)")
     args = parser.parse_args()
+
+    CFG.CAPTURE_ENABLED = args.capture
+    CFG.CAPTURE_INTERVAL_S = args.capture_interval
 
     rover = WaveRoverSerial(args.port, baud=115200,
                             timeout=CFG.SERIAL_TIMEOUT_S)
@@ -526,6 +581,27 @@ def main():
         pi.set_mode(echo, pigpio.INPUT)
         pi.write(trig, 0)
     time.sleep(0.1)
+
+    # ── COLMAP capture session ────────────────────────────────────────────
+    cap_session_dir = None
+    cap_csv_file    = None
+    cap_csv_writer  = None
+    cap_jsonl_file  = None
+    cap_frame_idx   = 0
+    cap_last_t      = 0.0
+
+    if CFG.CAPTURE_ENABLED:
+        cap_session_dir = create_session_dir()
+        cap_jsonl_file  = open(cap_session_dir / "metadata.jsonl", "w")
+        cap_csv_file    = open(cap_session_dir / "capture_log.csv", "w", newline="")
+        cap_csv_writer  = csv.writer(cap_csv_file)
+        cap_csv_writer.writerow([
+            "frame", "timestamp", "filename",
+            "roll", "pitch", "yaw", "gx", "gy", "gz",
+        ])
+        print(f"[CAP] COLMAP capture ON — session: {cap_session_dir}")
+        print(f"[CAP] Interval: {CFG.CAPTURE_INTERVAL_S}s, "
+              f"resolution: {CFG.CAPTURE_WIDTH}x{CFG.CAPTURE_HEIGHT}")
 
     print("Running. Press 'q' to quit.")
 
@@ -563,6 +639,51 @@ def main():
                     pid.reset()
                     state        = State.TURN_STOP
                     turn_pause_t = now
+                    continue
+
+                # ── COLMAP capture (periodic still) ──────────────────────
+                if CFG.CAPTURE_ENABLED and (now - cap_last_t) >= CFG.CAPTURE_INTERVAL_S:
+                    rover.stop_motors()
+                    time.sleep(CFG.CAPTURE_SETTLE_S)
+
+                    rover.request_imu()
+                    time.sleep(0.05)
+                    imu = rover.get_imu_snapshot()
+
+                    fname = f"frame_{cap_frame_idx:05d}.jpg"
+                    fpath = str(cap_session_dir / "images" / fname)
+                    cap_ts = time.time()
+
+                    ok = capture_still(fpath)
+                    if ok:
+                        r  = imu.get("r")  if imu else None
+                        p  = imu.get("p")  if imu else None
+                        y  = imu.get("y")  if imu else None
+                        gx = imu.get("gx") if imu else None
+                        gy = imu.get("gy") if imu else None
+                        gz = imu.get("gz") if imu else None
+
+                        record = {
+                            "frame": cap_frame_idx,
+                            "timestamp": cap_ts,
+                            "filename": fname,
+                            "imu": {"r": r, "p": p, "y": y,
+                                    "gx": gx, "gy": gy, "gz": gz},
+                        }
+                        cap_jsonl_file.write(json.dumps(record) + "\n")
+                        cap_jsonl_file.flush()
+                        cap_csv_writer.writerow([
+                            cap_frame_idx, f"{cap_ts:.3f}", fname,
+                            r, p, y, gx, gy, gz,
+                        ])
+                        cap_csv_file.flush()
+                        print(f"[CAP] #{cap_frame_idx:04d} saved  yaw={y}")
+                        cap_frame_idx += 1
+                    else:
+                        print(f"[CAP] #{cap_frame_idx:04d} FAILED — skipped")
+
+                    cap_last_t = time.time()
+                    last_t = time.time()
                     continue
 
                 # ── Vision-based PID row following ───────────────────────
@@ -662,6 +783,18 @@ def main():
             pass
         if pi and pi.connected:
             pi.stop()
+
+        if CFG.CAPTURE_ENABLED:
+            if cap_csv_file:
+                cap_csv_file.close()
+            if cap_jsonl_file:
+                cap_jsonl_file.close()
+            print(f"\n[CAP] Session complete — {cap_frame_idx} frames saved")
+            print(f"[CAP] Output: {cap_session_dir}")
+            print(f"[CAP] To reconstruct on your computer:")
+            print(f"  colmap automatic_reconstructor \\")
+            print(f"    --workspace_path {cap_session_dir} \\")
+            print(f"    --image_path {cap_session_dir}/images")
 
 
 if __name__ == "__main__":

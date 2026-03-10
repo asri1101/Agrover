@@ -89,6 +89,29 @@
     box-shadow: 0 8px 30px rgba(0,0,0,0.5); max-width: 220px;
   }
   #tooltip b { font-weight: 600; color: var(--text); }
+
+  .load-btn {
+    display: block; width: 100%; padding: 10px; border-radius: 8px; cursor: pointer;
+    background: var(--surface2); border: 1.5px dashed var(--border); color: var(--text);
+    font-size: 13px; text-align: center; transition: 0.15s;
+  }
+  .load-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+  .data-badge {
+    display: inline-block; font-size: 10px; font-weight: 600; padding: 2px 8px;
+    border-radius: 4px; margin-left: 6px; vertical-align: middle;
+  }
+  .data-badge.demo { background: #3b3222; color: var(--yellow); }
+  .data-badge.live { background: #1a3028; color: var(--green); }
+
+  #drop-overlay {
+    display: none; position: absolute; inset: 0; z-index: 50;
+    background: rgba(108,140,255,0.12); border: 3px dashed var(--accent);
+    border-radius: 12px; pointer-events: none;
+    align-items: center; justify-content: center;
+    font-size: 18px; font-weight: 600; color: var(--accent);
+  }
+  #drop-overlay.visible { display: flex; }
 </style>
 </head>
 <body>
@@ -124,6 +147,14 @@
     </div>
   </div>
   <div class="section">
+    <div class="section-title">Data Source <span class="data-badge demo" id="data-badge">Demo</span></div>
+    <button class="load-btn" id="load-btn">Load berries.json</button>
+    <input type="file" id="file-input" accept=".json" style="display:none">
+    <div style="margin-top:8px;font-size:11px;color:var(--text-dim)" id="data-info">
+      Showing randomly generated demo data. Load a berries.json from reconstruct.py to see real detections.
+    </div>
+  </div>
+  <div class="section">
     <div class="section-title">Selected Fruit</div>
     <div id="detail-panel" style="font-size:13px;color:var(--text-dim);">Click a fruit in the 3D view to inspect it.</div>
   </div>
@@ -131,6 +162,7 @@
 
 <div id="canvas-container">
   <div id="tooltip"></div>
+  <div id="drop-overlay">Drop berries.json here</div>
   <div class="controls-hint">Left-drag: Rotate &nbsp;|&nbsp; Right-drag: Pan &nbsp;|&nbsp; Scroll: Zoom &nbsp;|&nbsp; Click: Inspect fruit</div>
 </div>
 
@@ -282,37 +314,7 @@ for (let r = 0; r < ROW_COUNT; r++) {
   }
 }
 
-// ---- Generate fruits ----
-function pickStatus() {
-  const r = Math.random();
-  if (r < 0.45) return 'ripe';
-  if (r < 0.80) return 'ripening';
-  return 'unripe';
-}
-
-const fruits = [];
-let fid = 1;
-for (let r = 0; r < ROW_COUNT; r++) {
-  const z = ROW_SPACING * (r + 1);
-  for (let c = 0; c < TREES_PER_ROW; c++) {
-    const x = 2 + c * TREE_SPACING;
-    const count = Math.floor(Math.random() * 5) + 1;
-    for (let f = 0; f < count; f++) {
-      const fx = x + (Math.random() - 0.5) * 1.8;
-      const fy = 2.2 + Math.random() * 1.6;
-      const fz = z + (Math.random() - 0.5) * 1.8;
-      const status = pickStatus();
-      fruits.push({
-        id: fid++, x: fx, y: fy, z: fz,
-        row: r + 1, tree: c + 1, status,
-        size_mm: Math.round(30 + Math.random() * 50),
-        confidence: +(0.7 + Math.random() * 0.3).toFixed(2),
-      });
-    }
-  }
-}
-
-// ---- Fruit meshes ----
+// ---- Fruit rendering ----
 const fruitGeo = new THREE.SphereGeometry(0.18, 12, 8);
 const fruitMats = {
   ripe:     new THREE.MeshStandardMaterial({ color: COLORS.ripe, roughness: 0.4, metalness: 0.1, emissive: COLORS.ripe, emissiveIntensity: 0.15 }),
@@ -320,18 +322,90 @@ const fruitMats = {
   unripe:   new THREE.MeshStandardMaterial({ color: COLORS.unripe, roughness: 0.4, metalness: 0.1, emissive: COLORS.unripe, emissiveIntensity: 0.15 }),
 };
 
-const fruitMeshes = [];
+let fruits = [];
+let fruitMeshes = [];
 const fruitGroup = new THREE.Group();
 scene.add(fruitGroup);
 
-fruits.forEach(f => {
-  const mesh = new THREE.Mesh(fruitGeo, fruitMats[f.status]);
-  mesh.position.set(f.x, f.y, f.z);
-  mesh.castShadow = true;
-  mesh.userData = f;
-  fruitGroup.add(mesh);
-  fruitMeshes.push(mesh);
-});
+function generateDemoFruits() {
+  const data = [];
+  let fid = 1;
+  for (let r = 0; r < ROW_COUNT; r++) {
+    const z = ROW_SPACING * (r + 1);
+    for (let c = 0; c < TREES_PER_ROW; c++) {
+      const x = 2 + c * TREE_SPACING;
+      const count = Math.floor(Math.random() * 5) + 1;
+      for (let f = 0; f < count; f++) {
+        const rnd = Math.random();
+        const status = rnd < 0.45 ? 'ripe' : rnd < 0.80 ? 'ripening' : 'unripe';
+        data.push({
+          id: fid++,
+          x: x + (Math.random() - 0.5) * 1.8,
+          y: 2.2 + Math.random() * 1.6,
+          z: z + (Math.random() - 0.5) * 1.8,
+          row: r + 1, tree: c + 1, status,
+          size_mm: Math.round(30 + Math.random() * 50),
+          confidence: +(0.7 + Math.random() * 0.3).toFixed(2),
+        });
+      }
+    }
+  }
+  return data;
+}
+
+function loadFruitData(data, isLive = false) {
+  // Clear existing fruit meshes
+  while (fruitGroup.children.length > 0) {
+    fruitGroup.remove(fruitGroup.children[0]);
+  }
+  fruitMeshes = [];
+  fruits = data;
+
+  // Create meshes
+  fruits.forEach(f => {
+    const mat = fruitMats[f.status] || fruitMats.ripe;
+    const mesh = new THREE.Mesh(fruitGeo, mat);
+    mesh.position.set(f.x, f.y, f.z);
+    mesh.castShadow = true;
+    mesh.userData = f;
+    fruitGroup.add(mesh);
+    fruitMeshes.push(mesh);
+  });
+
+  // Update sidebar
+  activeFilter = 'all';
+  document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+  document.querySelector('[data-filter="all"]').classList.add('active');
+  updateStats(fruits);
+
+  // Update data source badge
+  const badge = document.getElementById('data-badge');
+  const info = document.getElementById('data-info');
+  if (isLive) {
+    badge.textContent = 'Live';
+    badge.className = 'data-badge live';
+    info.textContent = `Loaded ${fruits.length} berries from berries.json`;
+  } else {
+    badge.textContent = 'Demo';
+    badge.className = 'data-badge demo';
+    info.textContent = 'Showing randomly generated demo data. Load a berries.json from reconstruct.py to see real detections.';
+  }
+
+  // Auto-fit camera to the data bounding box
+  if (isLive && fruits.length > 0) {
+    const xs = fruits.map(f => f.x), ys = fruits.map(f => f.y), zs = fruits.map(f => f.z);
+    const cx = (Math.min(...xs) + Math.max(...xs)) / 2;
+    const cy = (Math.min(...ys) + Math.max(...ys)) / 2;
+    const cz = (Math.min(...zs) + Math.max(...zs)) / 2;
+    const span = Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...zs) - Math.min(...zs), 10);
+    controls.target.set(cx, cy, cz);
+    camera.position.set(cx + span * 0.6, cy + span * 0.8, cz + span * 0.8);
+    controls.update();
+  }
+}
+
+// Start with demo data
+loadFruitData(generateDemoFruits(), false);
 
 // ---- Robot ----
 const robotGroup = new THREE.Group();
@@ -394,9 +468,9 @@ renderer.domElement.addEventListener('click', (e) => {
     tooltip.style.display = 'block';
     tooltip.style.left = e.clientX - container.getBoundingClientRect().left + 12 + 'px';
     tooltip.style.top = e.clientY - container.getBoundingClientRect().top - 10 + 'px';
+    const loc = f.row ? `Row ${f.row}, Tree ${f.tree}<br>` : '';
     tooltip.innerHTML =
-      `<b>Fruit #${f.id}</b><br>` +
-      `Row ${f.row}, Tree ${f.tree}<br>` +
+      `<b>Berry #${f.id}</b><br>` + loc +
       `Status: <span style="color:${CSS_COLORS[f.status]};font-weight:600">${f.status}</span><br>` +
       `Height: ${f.y.toFixed(2)} m<br>` +
       `Size: ${f.size_mm} mm`;
@@ -439,12 +513,12 @@ function updateStats(list) {
   document.getElementById('leg-ripening').textContent = c.ripening;
   document.getElementById('leg-unripe').textContent = c.unripe;
 }
-updateStats(fruits);
 
 function showDetail(f) {
+  const loc = f.row ? `<div>Row <b>${f.row}</b> &middot; Tree <b>${f.tree}</b></div>` : '';
   document.getElementById('detail-panel').innerHTML =
-    `<div style="margin-bottom:6px"><b style="font-size:15px;color:var(--text)">Fruit #${f.id}</b></div>` +
-    `<div>Row <b>${f.row}</b> &middot; Tree <b>${f.tree}</b></div>` +
+    `<div style="margin-bottom:6px"><b style="font-size:15px;color:var(--text)">Berry #${f.id}</b></div>` +
+    loc +
     `<div>Status: <span style="color:${CSS_COLORS[f.status]};font-weight:600">${f.status}</span></div>` +
     `<div>Size: ${f.size_mm} mm</div>` +
     `<div>Confidence: ${(f.confidence * 100).toFixed(0)}%</div>` +
@@ -468,6 +542,49 @@ document.querySelectorAll('.filter-btn').forEach(btn => {
     const visible = activeFilter === 'all' ? fruits : fruits.filter(f => f.status === activeFilter);
     updateStats(visible);
   });
+});
+
+// ---- File loading (berries.json) ----
+function handleJsonFile(file) {
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    try {
+      const data = JSON.parse(e.target.result);
+      if (!Array.isArray(data) || data.length === 0) {
+        alert('berries.json must be a non-empty JSON array.');
+        return;
+      }
+      const first = data[0];
+      if (first.x === undefined || first.y === undefined || first.z === undefined) {
+        alert('Each berry object needs x, y, z coordinates.');
+        return;
+      }
+      loadFruitData(data, true);
+    } catch (err) {
+      alert('Failed to parse JSON: ' + err.message);
+    }
+  };
+  reader.readAsText(file);
+}
+
+document.getElementById('load-btn').addEventListener('click', () => {
+  document.getElementById('file-input').click();
+});
+document.getElementById('file-input').addEventListener('change', (e) => {
+  if (e.target.files.length > 0) handleJsonFile(e.target.files[0]);
+});
+
+// Drag-and-drop
+const dropOverlay = document.getElementById('drop-overlay');
+let dragCounter = 0;
+container.addEventListener('dragenter', (e) => { e.preventDefault(); dragCounter++; dropOverlay.classList.add('visible'); });
+container.addEventListener('dragleave', (e) => { e.preventDefault(); dragCounter--; if (dragCounter <= 0) { dragCounter = 0; dropOverlay.classList.remove('visible'); } });
+container.addEventListener('dragover', (e) => { e.preventDefault(); });
+container.addEventListener('drop', (e) => {
+  e.preventDefault();
+  dragCounter = 0;
+  dropOverlay.classList.remove('visible');
+  if (e.dataTransfer.files.length > 0) handleJsonFile(e.dataTransfer.files[0]);
 });
 
 // ---- Resize ----
