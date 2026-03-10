@@ -324,6 +324,7 @@ const fruitMats = {
 
 let fruits = [];
 let fruitMeshes = [];
+let activeFilter = 'all';
 const fruitGroup = new THREE.Group();
 scene.add(fruitGroup);
 
@@ -527,7 +528,6 @@ function showDetail(f) {
 }
 
 // ---- Filters ----
-let activeFilter = 'all';
 document.querySelectorAll('.filter-btn').forEach(btn => {
   btn.addEventListener('click', () => {
     document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
