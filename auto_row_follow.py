@@ -1,6 +1,7 @@
 import serial
 import argparse
 import threading
+from enum import Enum, auto
 import cv2
 import numpy as np
 from PIL import Image
@@ -47,6 +48,11 @@ class Rover:
         self.ser.close()
         self._thread.join()
 
+class State(Enum):
+    FOLLOWING = auto()
+    CHANGE_ROW = auto()
+    TURNING = auto()
+
 def create_rough_mask():
     filename = "applerow.jpg"
     with Image.open(filename) as image:
@@ -62,11 +68,37 @@ def create_rough_mask():
 
 def clean_mask(mask):
     kernel = np.ones((5, 5), np.uint8)
-    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=3)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=1)
     return mask
 
-def follow_row(rover: Rover):
+def smooth_1d(x, k):
+    x = np.asarray(x, dtype=np.float32)
+    if k <= 1:
+        return x
+    if k % 2 == 0:
+        k += 1
+    kernel = np.ones(k, dtype=np.float32) / k
+    return np.convolve(x, kernel, mode="same")
+
+def find_center(mask):
+    height, width = mask.shape
+    cropped = mask[0:height//2, 0:width]
+    column_sums = np.sum(cropped, axis=0)
+    smooth_column_sums = smooth_1d(column_sums, 21)
+    lowest_sum = np.argmin(smooth_column_sums)
+    return lowest_sum
+
+def calculate_error(mask):
+    width = mask.shape[1]
+    center = find_center(mask)
+    return center - width//2
+
+def pid_control(error):
     pass
+
+def follow_row(rover: Rover):
+    mask = create_rough_mask()
+    smoothed = clean_mask(mask)
 
 def next_row(rover: Rover):
     pass
