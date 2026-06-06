@@ -1,6 +1,7 @@
 import serial
 import argparse
 import threading
+import time
 from enum import Enum, auto
 import cv2
 import numpy as np
@@ -91,14 +92,66 @@ def find_center(mask):
 def calculate_error(mask):
     width = mask.shape[1]
     center = find_center(mask)
-    return center - width//2
+    # Normalized px error: positive => corridor center is left of image center
+    return (width // 2 - center) / width
+
+class PID:
+    def __init__(self, kp, ki, kd):
+        self.kp, self.ki, self.kd = kp, ki, kd
+        self.integral = 0.0
+        self.prev_error = 0.0
+
+    def reset(self):
+        self.integral = 0.0
+        self.prev_error = 0.0
+
+    def update(self, error: float, dt: float) -> float:
+        if dt <= 1e-6:
+            return 0.0
+        self.integral += error * dt
+        derivative = (error - self.prev_error) / dt
+        self.prev_error = error
+        return self.kp * error + self.ki * self.integral + self.kd * derivative
+
+KP = 0.90
+KI = 0.00
+KD = 0.20
+MAX_STEER = 0.25
+BASE_SPEED = 0.20
+
+_pid = PID(KP, KI, KD)
+_pid_last_t = None
+
+def reset_pid():
+    global _pid_last_t
+    _pid.reset()
+    _pid_last_t = None
 
 def pid_control(error):
-    pass
+    """Return clamped steer correction from normalized row error."""
+    global _pid_last_t
+    now = time.monotonic()
+    if _pid_last_t is None:
+        dt = 0.05
+    else:
+        dt = now - _pid_last_t
+    _pid_last_t = now
+
+    steer = _pid.update(error, dt)
+    return float(np.clip(steer, -MAX_STEER, MAX_STEER))
+
+def apply_steering(rover: Rover, steer: float, base_speed: float = BASE_SPEED):
+    left = base_speed - steer
+    right = base_speed + steer
+    rover.ser.write(
+        f'{{"T":1,"L":{left:.2f},"R":{right:.2f}}}\n'.encode("utf-8")
+    )
 
 def follow_row(rover: Rover):
-    mask = create_rough_mask()
-    smoothed = clean_mask(mask)
+    mask = clean_mask(create_rough_mask())
+    error = calculate_error(mask)
+    steer = pid_control(error)
+    apply_steering(rover, steer)
 
 def next_row(rover: Rover):
     pass
