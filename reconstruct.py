@@ -369,6 +369,8 @@ def map_detections_to_3d(
 # =============================================================================
 
 def main():
+    global MATCH_RADIUS, MIN_BLOB_AREA
+
     parser = argparse.ArgumentParser(
         description="COLMAP berry reconstruction pipeline"
     )
@@ -394,7 +396,6 @@ def main():
     )
     args = parser.parse_args()
 
-    global MATCH_RADIUS, MIN_BLOB_AREA
     MATCH_RADIUS = args.match_radius
     MIN_BLOB_AREA = args.min_blob
 

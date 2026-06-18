@@ -30,3 +30,30 @@ Run:
 Controls:
   q = quit
 """
+
+## Raspberry Pi capture -> Gaussian Splatting -> farm twin
+
+Capture regular side-camera photos into a COLMAP-ready session:
+
+```bash
+python3 colmap_capture.py --interval 2 --count 120 --width 1920 --height 1080
+```
+
+Build the reconstruction outputs:
+
+```bash
+python3 gaussian_splat_pipeline.py colmap_sessions/session_YYYYMMDD_HHMMSS
+```
+
+That runs COLMAP and exports `berries.json`. To also train a Gaussian Splatting model, pass a local checkout of the Graphdeco trainer:
+
+```bash
+python3 gaussian_splat_pipeline.py colmap_sessions/session_YYYYMMDD_HHMMSS \
+  --gs-repo /path/to/gaussian-splatting \
+  --iterations 7000
+```
+
+Open `farm_twin.html`, then load or drop:
+
+- `berries.json` for detected fruit positions
+- `gaussian_splat.ply` for the reconstructed splat/point-cloud layer

@@ -96,6 +96,7 @@
     font-size: 13px; text-align: center; transition: 0.15s;
   }
   .load-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .load-btn + .load-btn { margin-top: 8px; }
 
   .data-badge {
     display: inline-block; font-size: 10px; font-weight: 600; padding: 2px 8px;
@@ -149,9 +150,14 @@
   <div class="section">
     <div class="section-title">Data Source <span class="data-badge demo" id="data-badge">Demo</span></div>
     <button class="load-btn" id="load-btn">Load berries.json</button>
+    <button class="load-btn" id="load-splat-btn">Load gaussian_splat.ply</button>
     <input type="file" id="file-input" accept=".json" style="display:none">
+    <input type="file" id="splat-input" accept=".ply" style="display:none">
     <div style="margin-top:8px;font-size:11px;color:var(--text-dim)" id="data-info">
       Showing randomly generated demo data. Load a berries.json from reconstruct.py to see real detections.
+    </div>
+    <div style="margin-top:8px;font-size:11px;color:var(--text-dim)" id="splat-info">
+      No Gaussian splat loaded.
     </div>
   </div>
   <div class="section">
@@ -162,7 +168,7 @@
 
 <div id="canvas-container">
   <div id="tooltip"></div>
-  <div id="drop-overlay">Drop berries.json here</div>
+  <div id="drop-overlay">Drop berries.json or gaussian_splat.ply here</div>
   <div class="controls-hint">Left-drag: Rotate &nbsp;|&nbsp; Right-drag: Pan &nbsp;|&nbsp; Scroll: Zoom &nbsp;|&nbsp; Click: Inspect fruit</div>
 </div>
 
@@ -178,6 +184,7 @@
 <script type="module">
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { PLYLoader } from 'three/addons/loaders/PLYLoader.js';
 
 const COLORS = { ripe: 0x34d399, ripening: 0xfbbf24, unripe: 0xf87171 };
 const CSS_COLORS = { ripe: '#34d399', ripening: '#fbbf24', unripe: '#f87171' };
@@ -254,6 +261,65 @@ scene.add(plot);
 const gridHelper = new THREE.GridHelper(FARM_X + 4, TREES_PER_ROW + 2, 0x2a3a1a, 0x1e2e14);
 gridHelper.position.set(FARM_X * 0.5, 0.16, FARM_Z * 0.5);
 scene.add(gridHelper);
+
+// ---- Gaussian splat / point-cloud layer ----
+const plyLoader = new PLYLoader();
+const splatGroup = new THREE.Group();
+scene.add(splatGroup);
+
+function clearSplat() {
+  while (splatGroup.children.length > 0) {
+    const obj = splatGroup.children[0];
+    splatGroup.remove(obj);
+    if (obj.geometry) obj.geometry.dispose();
+    if (obj.material) obj.material.dispose();
+  }
+}
+
+function fitCameraToGeometry(geometry) {
+  geometry.computeBoundingSphere();
+  const sphere = geometry.boundingSphere;
+  if (!sphere) return;
+
+  controls.target.copy(sphere.center);
+  const radius = Math.max(sphere.radius, 2);
+  camera.position.set(
+    sphere.center.x + radius * 1.2,
+    sphere.center.y + radius * 0.8,
+    sphere.center.z + radius * 1.2
+  );
+  controls.update();
+}
+
+function loadSplatBuffer(buffer, filename = 'gaussian_splat.ply') {
+  let geometry;
+  try {
+    geometry = plyLoader.parse(buffer);
+  } catch (err) {
+    alert('Failed to parse PLY: ' + err.message);
+    return;
+  }
+
+  clearSplat();
+  geometry.computeVertexNormals();
+
+  const hasVertexColor = !!geometry.getAttribute('color');
+  const material = new THREE.PointsMaterial({
+    size: 0.035,
+    sizeAttenuation: true,
+    color: hasVertexColor ? 0xffffff : 0x9fbf7a,
+    vertexColors: hasVertexColor,
+    transparent: true,
+    opacity: 0.92,
+  });
+  const points = new THREE.Points(geometry, material);
+  splatGroup.add(points);
+  fitCameraToGeometry(geometry);
+
+  const count = geometry.getAttribute('position')?.count || 0;
+  document.getElementById('splat-info').textContent =
+    `Loaded ${filename} with ${count.toLocaleString()} points`;
+}
 
 // ---- Axis indicators ----
 function makeAxisLine(from, to, color) {
@@ -567,11 +633,34 @@ function handleJsonFile(file) {
   reader.readAsText(file);
 }
 
+function handleSplatFile(file) {
+  const reader = new FileReader();
+  reader.onload = (e) => loadSplatBuffer(e.target.result, file.name);
+  reader.readAsArrayBuffer(file);
+}
+
+function handleDroppedFile(file) {
+  const name = file.name.toLowerCase();
+  if (name.endsWith('.json')) {
+    handleJsonFile(file);
+  } else if (name.endsWith('.ply')) {
+    handleSplatFile(file);
+  } else {
+    alert('Load a berries.json or gaussian_splat.ply file.');
+  }
+}
+
 document.getElementById('load-btn').addEventListener('click', () => {
   document.getElementById('file-input').click();
 });
 document.getElementById('file-input').addEventListener('change', (e) => {
   if (e.target.files.length > 0) handleJsonFile(e.target.files[0]);
+});
+document.getElementById('load-splat-btn').addEventListener('click', () => {
+  document.getElementById('splat-input').click();
+});
+document.getElementById('splat-input').addEventListener('change', (e) => {
+  if (e.target.files.length > 0) handleSplatFile(e.target.files[0]);
 });
 
 // Drag-and-drop
@@ -584,7 +673,7 @@ container.addEventListener('drop', (e) => {
   e.preventDefault();
   dragCounter = 0;
   dropOverlay.classList.remove('visible');
-  if (e.dataTransfer.files.length > 0) handleJsonFile(e.dataTransfer.files[0]);
+  if (e.dataTransfer.files.length > 0) handleDroppedFile(e.dataTransfer.files[0]);
 });
 
 // ---- Resize ----

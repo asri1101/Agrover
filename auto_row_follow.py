@@ -118,6 +118,10 @@ KI = 0.00
 KD = 0.20
 MAX_STEER = 0.25
 BASE_SPEED = 0.20
+ROW_CLEAR_TIME_S = 1.0
+RIGHT_TURN_TIME_S = 1.2
+ROW_STEP_TIME_S = 2.0
+REALIGN_TIME_S = 1.0
 
 _pid = PID(KP, KI, KD)
 _pid_last_t = None
@@ -154,7 +158,33 @@ def follow_row(rover: Rover):
     apply_steering(rover, steer)
 
 def next_row(rover: Rover):
-    pass
+    rover.stop()
+    time.sleep(0.2)
+
+    rover.move_forward()
+    time.sleep(ROW_CLEAR_TIME_S)
+    rover.stop()
+    time.sleep(0.1)
+
+    rover.turn_right()
+    time.sleep(RIGHT_TURN_TIME_S)
+    rover.stop()
+    time.sleep(0.1)
+
+    rover.move_forward()
+    time.sleep(ROW_STEP_TIME_S)
+    rover.stop()
+    time.sleep(0.1)
+
+    rover.turn_right()
+    time.sleep(RIGHT_TURN_TIME_S)
+    rover.stop()
+    time.sleep(0.1)
+
+    rover.move_forward()
+    time.sleep(REALIGN_TIME_S)
+    rover.stop()
+    reset_pid()
 
 def main():
     mask = create_rough_mask()
