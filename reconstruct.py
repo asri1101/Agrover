@@ -55,7 +55,7 @@ def run_colmap(session_dir: Path) -> Path:
         "--image_path", str(image_path),
         "--ImageReader.single_camera", "1",
         "--ImageReader.camera_model", "OPENCV",
-        "--SiftExtraction.use_gpu", "1",
+        "--FeatureExtraction.use_gpu", "0",
     ], check=True)
 
     # Exhaustive matching (fine for < ~500 images typical of a row pass)
@@ -63,7 +63,7 @@ def run_colmap(session_dir: Path) -> Path:
     subprocess.run([
         "colmap", "exhaustive_matcher",
         "--database_path", str(db_path),
-        "--SiftMatching.use_gpu", "1",
+        "--FeatureMatching.use_gpu", "0",
     ], check=True)
 
     # Sparse mapper
