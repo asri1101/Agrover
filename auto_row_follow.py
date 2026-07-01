@@ -257,7 +257,7 @@ def main():
             frame = camera.read()
             smoothed = clean_mask(create_rough_mask(frame))
             cv2.imshow("Camera", frame)
-            cv2.imshow("Mask", smoothed.astype(np.uint8))
+            cv2.imshow("Mask", smoothed)
             if cv2.waitKey(1) & 0xFF == ord("q"):
                 break
     finally:
