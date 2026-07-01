@@ -1,11 +1,13 @@
 import serial
 import argparse
+import os
+import re
+import subprocess
 import threading
 import time
 from enum import Enum, auto
 import cv2
 import numpy as np
-from PIL import Image
 
 """
 This is a file that establishes a class RoverSerial and writes instructions for its autonomous navigation
@@ -54,18 +56,71 @@ class State(Enum):
     CHANGE_ROW = auto()
     TURNING = auto()
 
-def create_rough_mask():
-    filename = "applerow.jpg"
-    with Image.open(filename) as image:
-        image.load()
-    R, G, B = image.split()
-    R = np.array(R).astype(np.float32)
-    G = np.array(G).astype(np.float32)
-    B = np.array(B).astype(np.float32)
+def find_usb_video_device():
+    try:
+        result = subprocess.run(
+            ["v4l2-ctl", "--list-devices"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        result = None
+
+    if result:
+        current_device_is_usb = False
+        for line in result.stdout.splitlines():
+            stripped = line.strip()
+            if not stripped:
+                current_device_is_usb = False
+                continue
+            if not line.startswith("\t"):
+                current_device_is_usb = "usb" in stripped.lower() or "logitech" in stripped.lower()
+                continue
+            if current_device_is_usb:
+                match = re.search(r"/dev/video\d+", stripped)
+                if match:
+                    return match.group(0)
+
+    for index in range(10):
+        device = f"/dev/video{index}"
+        if os.path.exists(device):
+            return device
+
+    raise RuntimeError("Could not find a /dev/video* camera device.")
+
+class Webcam:
+    """USB webcams on Raspberry Pi are exposed by Linux V4L2 as /dev/video*."""
+    def __init__(self, device="auto", width=640, height=480, fps=30):
+        if device == "auto":
+            device = find_usb_video_device()
+        self.device = device
+        self.cap = cv2.VideoCapture(device, cv2.CAP_V4L2)
+        if not self.cap.isOpened():
+            raise RuntimeError(f"Could not open webcam at {device}")
+
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+        self.cap.set(cv2.CAP_PROP_FPS, fps)
+
+    def read(self):
+        ok, frame = self.cap.read()
+        if not ok or frame is None:
+            raise RuntimeError("Webcam did not return a frame.")
+        return frame
+
+    def close(self):
+        self.cap.release()
+
+def create_rough_mask(frame):
+    B, G, R = cv2.split(frame)
+    R = R.astype(np.float32)
+    G = G.astype(np.float32)
+    B = B.astype(np.float32)
     exg = (2 * G - R - B)
     exg_norm = cv2.normalize(exg, None, 0, 255, cv2.NORM_MINMAX)
     _, mask = cv2.threshold(exg_norm, 150, 255, cv2.THRESH_BINARY)
-    return mask
+    return mask.astype(np.uint8)
 
 def clean_mask(mask):
     kernel = np.ones((5, 5), np.uint8)
@@ -151,8 +206,9 @@ def apply_steering(rover: Rover, steer: float, base_speed: float = BASE_SPEED):
         f'{{"T":1,"L":{left:.2f},"R":{right:.2f}}}\n'.encode("utf-8")
     )
 
-def follow_row(rover: Rover):
-    mask = clean_mask(create_rough_mask())
+def follow_row(rover: Rover, camera: Webcam):
+    frame = camera.read()
+    mask = clean_mask(create_rough_mask(frame))
     error = calculate_error(mask)
     steer = pid_control(error)
     apply_steering(rover, steer)
@@ -187,11 +243,26 @@ def next_row(rover: Rover):
     reset_pid()
 
 def main():
-    mask = create_rough_mask()
-    smoothed = clean_mask(mask)
-    cv2.imshow("Mask", smoothed.astype(np.uint8))
-    cv2.waitKey(0)
-    cv2.destroyAllWindows()
+    parser = argparse.ArgumentParser(description="Preview row mask from a Raspberry Pi USB webcam.")
+    parser.add_argument("--camera", default="auto", help="V4L2 camera device, e.g. /dev/video2, or auto")
+    parser.add_argument("--width", type=int, default=640)
+    parser.add_argument("--height", type=int, default=480)
+    parser.add_argument("--fps", type=int, default=30)
+    args = parser.parse_args()
+
+    camera = Webcam(args.camera, args.width, args.height, args.fps)
+    print(f"Using camera: {camera.device}")
+    try:
+        while True:
+            frame = camera.read()
+            smoothed = clean_mask(create_rough_mask(frame))
+            cv2.imshow("Camera", frame)
+            cv2.imshow("Mask", smoothed.astype(np.uint8))
+            if cv2.waitKey(1) & 0xFF == ord("q"):
+                break
+    finally:
+        camera.close()
+        cv2.destroyAllWindows()
 
 if __name__ == "__main__":
     main()
